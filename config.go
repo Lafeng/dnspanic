@@ -48,16 +48,16 @@ func (c *config) findEntry(name string) *entry {
 }
 
 const (
-	IPv4len      = 4
+	_IPv4len      = 4
 	big          = 0xFFFFFF
 	defaultLabel = "default"
 )
 
 // Parse IPv4 address (d.d.d.d).
 func parseIPv4(s string) []byte {
-	var p [IPv4len]byte
+	var p [_IPv4len]byte
 	i := 0
-	for j := 0; j < IPv4len; j++ {
+	for j := 0; j < _IPv4len; j++ {
 		if i >= len(s) {
 			// Missing octets.
 			return nil

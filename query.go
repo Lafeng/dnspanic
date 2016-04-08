@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	TIMEOUT = time.Second
+	_TIMEOUT = time.Second
 )
 
 var (
@@ -18,12 +18,12 @@ var (
 
 func init() {
 	clientTCP.Net = "tcp"
-	clientTCP.ReadTimeout = TIMEOUT
-	clientTCP.WriteTimeout = TIMEOUT
+	clientTCP.ReadTimeout = _TIMEOUT
+	clientTCP.WriteTimeout = _TIMEOUT
 
 	clientUDP.Net = "udp"
-	clientUDP.ReadTimeout = TIMEOUT
-	clientUDP.WriteTimeout = TIMEOUT
+	clientUDP.ReadTimeout = _TIMEOUT
+	clientUDP.WriteTimeout = _TIMEOUT
 }
 
 type backendSet map[string][]*backend

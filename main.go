@@ -96,7 +96,7 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			if resultMsg == nil {
 				continue
 			}
-		case <-time.After(TIMEOUT):
+		case <-time.After(_TIMEOUT):
 			log.Println("waiting response timeout")
 			continue
 		}
