@@ -18,6 +18,7 @@ type droppingV4Filter struct {
 }
 
 func (f *droppingV4Filter) filter(answers []dns.RR) []dns.RR {
+	var a *dns.A
 	for _, rr := range answers {
 		// only accept A
 		if arr, y := rr.(*dns.A); y {
@@ -25,8 +26,16 @@ func (f *droppingV4Filter) filter(answers []dns.RR) []dns.RR {
 			if f.rules[ip] {
 				log.Println("\tdrop", arr)
 				return nil
+			} else {
+				a = arr
 			}
 		}
+	}
+	// passed the test that based on fixed rules
+	if len(answers) == 1 && a != nil {
+		// only got one answer that one is little dubious
+		log.Println("\tshould verify", a.Hdr.Name, a.A)
+		a.Hdr.Ttl = 2
 	}
 	return answers
 }

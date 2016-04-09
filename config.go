@@ -48,16 +48,16 @@ func (c *config) findEntry(name string) *entry {
 }
 
 const (
-	_IPv4len      = 4
+	ipv4len      = 4
 	big          = 0xFFFFFF
 	defaultLabel = "default"
 )
 
 // Parse IPv4 address (d.d.d.d).
 func parseIPv4(s string) []byte {
-	var p [_IPv4len]byte
+	var p [ipv4len]byte
 	i := 0
-	for j := 0; j < _IPv4len; j++ {
+	for j := 0; j < ipv4len; j++ {
 		if i >= len(s) {
 			// Missing octets.
 			return nil
@@ -133,19 +133,20 @@ func parseBackend(s string) *backend {
 	if err != nil {
 		panic(err)
 	}
-	backend := &backend{
+	be := &backend{
 		net:  u.Scheme,
 		addr: u.Host,
 	}
 	_, _, err = net.SplitHostPort(u.Host)
 	if ae, y := err.(*net.AddrError); y {
 		if strings.Contains(ae.Err, "port") {
-			backend.addr += ":53"
+			be.addr += ":53"
 		} else {
 			panic(err)
 		}
 	}
-	return backend
+	be.url = fmt.Sprintf("%s://%s", be.net, be.addr)
+	return be
 }
 
 func parseDenyFilters(arr []string) filter {

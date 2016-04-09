@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 var (
 	conf *config
 	rrc  *rrcache
+	qclt *qClient
 )
 
 func main() {
@@ -26,6 +28,7 @@ func main() {
 	flag.StringVar(&cfgPath, "c", "config.conf", "config file path")
 	flag.BoolVar(&formatCfg, "format", false, "format config file")
 	flag.Parse()
+	qclt = newQClient()
 	rrc = newRRCache()
 	conf = new(config)
 	if err := initialConfig(cfgPath, conf); err != nil {
@@ -47,6 +50,9 @@ func main() {
 	tcpServer.Handler = handler
 	udpServer.Addr = localAddr
 	tcpServer.Addr = localAddr
+	udpServer.DecorateReader = func(r dns.Reader) dns.Reader {
+		return &decoratedIdleReader{Reader: r}
+	}
 
 	go func() { failure <- udpServer.ListenAndServe() }()
 	go func() { failure <- tcpServer.ListenAndServe() }()
@@ -54,11 +60,32 @@ func main() {
 	log.Println("Ready for serving dns on udp/tcp", localAddr)
 	waitSignal(failure)
 
-	// waiting for shutdown
 	go func() { failure <- tcpServer.Shutdown() }()
 	go func() { failure <- udpServer.Shutdown() }()
+	qclt.shutdown()
+	// waiting for shutdown
 	<-failure
 	<-failure
+}
+
+type decoratedIdleReader struct {
+	dns.Reader
+	idleCnt int
+}
+
+func (dr *decoratedIdleReader) ReadTCP(conn net.Conn, timeout time.Duration) ([]byte, error) {
+	return nil, nil
+}
+
+func (dr *decoratedIdleReader) ReadUDP(conn *net.UDPConn, timeout time.Duration) (b []byte, s *dns.SessionUDP, e error) {
+	b, s, e = dr.Reader.ReadUDP(conn, timeout)
+	if ne, y := e.(*net.OpError); y && ne.Timeout() {
+		dr.idleCnt++
+		if dr.idleCnt&3 == 3 {
+			go qclt.cleanup()
+		}
+	}
+	return
 }
 
 type proxyHandler struct{}
@@ -75,54 +102,32 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 	entry := conf.findEntry(req.Question[0].Name)
 
+	var resultMsg *dns.Msg
 	var nextReq dns.Msg
 	nextReq.Id = dns.Id()
 	nextReq.RecursionDesired = true
 	nextReq.Question = req.Question
 
-	var result = make(chan *dns.Msg, len(entry.backends))
-	var progress = make(chan byte, len(entry.backends))
-	defer close(progress)
-
-	go asyncQuery(entry.backends, &nextReq, result, progress)
-
-	var resultMsg *dns.Msg
-	for i := 0; i < cap(progress); i++ {
-		if i >= 1 {
-			progress <- 1
-		}
+nextQuery:
+	for _, be := range entry.backends {
+		tx := newTransaction(&nextReq, entry.filters)
+		qclt.query(be, tx)
 		select {
-		case resultMsg = <-result:
-			if resultMsg == nil {
-				continue
+		case resultMsg = <-tx.result:
+			if resultMsg != nil {
+				break nextQuery
 			}
-		case <-time.After(_TIMEOUT):
-			log.Println("waiting response timeout")
+		case <-time.After(_TIMEOUT_S):
 			continue
 		}
-
-		resultRR := resultMsg.Answer
-		if len(resultRR) > 0 && entry.filters != nil {
-			// apply filters
-			for _, f := range entry.filters {
-				resultRR = f.filter(resultRR)
-			}
-			// all RRs were filtered
-			if len(resultRR) == 0 {
-				resultMsg = nil
-				continue
-			}
-		}
-		// write back RRs
-		resultMsg.Answer = resultRR
-		break
 	}
+
 	if resultMsg != nil {
-		rrc.set(resultMsg)
+		rrc.set(resultMsg, 0)
 		resultMsg.Id = req.Id
 		w.WriteMsg(resultMsg)
 	} else {
-		log.Println("no response")
+		log.Println("no response for", req.Question[0].Name)
 	}
 }
 

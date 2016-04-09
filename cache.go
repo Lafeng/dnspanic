@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cloudflare/golibs/lrucache"
 	"github.com/miekg/dns"
-	"github.com/patrickmn/go-cache"
 )
 
 type rrcache struct {
-	cache *cache.Cache
+	cache *lrucache.LRUCache
 }
 
 func newRRCache() *rrcache {
 	return &rrcache{
-		cache: cache.New(time.Minute*5, time.Second*30),
+		cache: lrucache.NewLRUCache(1024),
 	}
 }
 
@@ -24,7 +24,7 @@ func msgKey(m *dns.Msg) string {
 }
 
 func (c *rrcache) get(req *dns.Msg) *dns.Msg {
-	v, found := c.cache.Get(msgKey(req))
+	v, found := c.cache.GetNotStale(msgKey(req))
 	if found {
 		return v.(*dns.Msg).Copy()
 	} else {
@@ -32,7 +32,7 @@ func (c *rrcache) get(req *dns.Msg) *dns.Msg {
 	}
 }
 
-func (c *rrcache) set(resp *dns.Msg) {
+func (c *rrcache) set(resp *dns.Msg, lshift uint) {
 	var expiry uint32 = 0xffFFffFF
 	for _, rr := range resp.Answer {
 		ttl := rr.Header().Ttl
@@ -40,8 +40,12 @@ func (c *rrcache) set(resp *dns.Msg) {
 			expiry = ttl
 		}
 	}
-	if expiry > 3600 {
+	if expiry <= 2 { // special case for dubious item
+		expiry = 300
+	} else if expiry > 3600 {
 		expiry = 3600
+	} else {
+		expiry <<= lshift
 	}
-	c.cache.Set(msgKey(resp), resp, time.Second*time.Duration(expiry))
+	c.cache.Set(msgKey(resp), resp, time.Now().Add(time.Duration(expiry)*1e9))
 }
