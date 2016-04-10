@@ -62,18 +62,7 @@ func (t *transaction) reply(msg *dns.Msg, rtt int, err error, be *backend) {
 		}
 
 		if msg != nil && len(msg.Answer) > 0 {
-			var rrset = msg.Answer
-			// apply filters
-			for _, f := range t.filters {
-				rrset = f.filter(rrset)
-			}
-			// all RRs were filtered
-			if len(rrset) == 0 {
-				t.lastMsg = nil
-				msg = nil
-			} else { // write back
-				msg.Answer = rrset
-			}
+			msg = applyFilters(msg, t.filters)
 		}
 		// feedback
 		select {
@@ -85,13 +74,41 @@ func (t *transaction) reply(msg *dns.Msg, rtt int, err error, be *backend) {
 		if lastMsg := t.lastMsg; lastMsg != nil {
 			log.Printf("recv-%d record %s\n previous record %s may be dirty", cnt, msg.Answer, lastMsg.Answer)
 		}
-		rrc.set(msg, 1)
+		// should filter second response
+		msg = applyFilters(msg, conf.global.filters)
+		if msg != nil {
+			rrc.set(msg, 1)
+		}
 	}
+}
+
+func applyFilters(msg *dns.Msg, filters []filter) *dns.Msg {
+	var rrset = msg.Answer
+	// apply filters
+	for _, f := range filters {
+		rrset = f.filter(rrset, msg)
+	}
+	// all RRs were filtered
+	if len(rrset) == 0 {
+		msg = nil
+	} else { // write back
+		msg.Answer = rrset
+	}
+	return msg
 }
 
 // weak equivalent
 func rrhdrEquals(a, b *dns.RR_Header) bool {
 	return a.Class == b.Class && a.Rrtype == b.Rrtype && a.Rdlength == b.Rdlength
+}
+
+var opt_hdr = []dns.RR{
+	&dns.OPT{
+		Hdr: dns.RR_Header{
+			Name:   ".",
+			Rrtype: dns.TypeOPT,
+		},
+	},
 }
 
 type qClient struct {

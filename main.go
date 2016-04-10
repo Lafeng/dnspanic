@@ -25,7 +25,7 @@ func main() {
 		formatCfg bool
 	)
 	flag.StringVar(&localAddr, "l", ":53", "local listen address")
-	flag.StringVar(&cfgPath, "c", "config.conf", "config file path")
+	flag.StringVar(&cfgPath, "c", "dnspanic.conf", "config file path")
 	flag.BoolVar(&formatCfg, "format", false, "format config file")
 	flag.Parse()
 	qclt = newQClient()
@@ -91,9 +91,11 @@ func (dr *decoratedIdleReader) ReadUDP(conn *net.UDPConn, timeout time.Duration)
 type proxyHandler struct{}
 
 func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
-	if req.MsgHdr.Response == true || len(req.Question) == 0 { // supposed responses sent to us are bogus
+	// excluding
+	if req.MsgHdr.Response == true || len(req.Question) == 0 {
 		return
 	}
+	// cache first
 	if cc := rrc.get(req); cc != nil {
 		cc.Id = req.Id
 		w.WriteMsg(cc)
@@ -101,12 +103,19 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	entry := conf.findEntry(req.Question[0].Name)
+	// prefilter
+	if entry == conf.disabled {
+		dns.HandleFailed(w, req)
+		return
+	}
 
 	var resultMsg *dns.Msg
 	var nextReq dns.Msg
 	nextReq.Id = dns.Id()
 	nextReq.RecursionDesired = true
+	nextReq.AuthenticatedData = true
 	nextReq.Question = req.Question
+	nextReq.Extra = opt_hdr
 
 nextQuery:
 	for _, be := range entry.backends {

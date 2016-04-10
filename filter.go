@@ -10,14 +10,14 @@ import (
 type filterSet map[string][]filter
 
 type filter interface {
-	filter(answers []dns.RR) []dns.RR
+	filter(answers []dns.RR, msg *dns.Msg) []dns.RR
 }
 
 type droppingV4Filter struct {
 	rules map[uint32]bool
 }
 
-func (f *droppingV4Filter) filter(answers []dns.RR) []dns.RR {
+func (f *droppingV4Filter) filter(answers []dns.RR, msg *dns.Msg) []dns.RR {
 	var a *dns.A
 	for _, rr := range answers {
 		// only accept A
@@ -32,7 +32,7 @@ func (f *droppingV4Filter) filter(answers []dns.RR) []dns.RR {
 		}
 	}
 	// passed the test that based on fixed rules
-	if len(answers) == 1 && a != nil {
+	if len(answers) == 1 && a != nil && len(msg.Extra) == 0 {
 		// only got one answer that one is little dubious
 		log.Println("\tshould verify", a.Hdr.Name, a.A)
 		a.Hdr.Ttl = 2
@@ -67,7 +67,7 @@ type replacementV4Filter struct {
 	rules map[uint32]uint32
 }
 
-func (f *replacementV4Filter) filter(answers []dns.RR) []dns.RR {
+func (f *replacementV4Filter) filter(answers []dns.RR, msg *dns.Msg) []dns.RR {
 	for _, rr := range answers {
 		if arr, y := rr.(*dns.A); y {
 			ip := binary.BigEndian.Uint32(arr.A.To4())

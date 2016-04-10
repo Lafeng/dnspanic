@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/binary"
+	"bufio"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -15,7 +15,8 @@ import (
 )
 
 type config struct {
-	global      *entry
+	global      *entry // default
+	disabled    *entry // empty entry as disabled reference
 	entries     *radix.Tree
 	allFilters  filterSet
 	allBackends backendSet
@@ -48,68 +49,27 @@ func (c *config) findEntry(name string) *entry {
 }
 
 const (
-	ipv4len      = 4
-	big          = 0xFFFFFF
 	defaultLabel = "default"
 )
 
 // Parse IPv4 address (d.d.d.d).
-func parseIPv4(s string) []byte {
-	var p [ipv4len]byte
-	i := 0
-	for j := 0; j < ipv4len; j++ {
-		if i >= len(s) {
-			// Missing octets.
-			return nil
+func parseIPv4(s string) uint32 {
+	var a uint32
+	var m byte
+	for _, c := range []byte(s) {
+		if c >= '0' && c <= '9' { // number
+			m = m*10 + c - '0'
+		} else if c == '.' {
+			a, m = (a<<8)|uint32(m), 0
+		} else { // exception
+			return 0
 		}
-		if j > 0 {
-			if s[i] != '.' {
-				return nil
-			}
-			i++
-		}
-		var (
-			n  int
-			ok bool
-		)
-		n, i, ok = dtoi(s, i)
-		if !ok || n > 0xFF {
-			return nil
-		}
-		p[j] = byte(n)
 	}
-	if i != len(s) {
-		return nil
-	}
-	return p[:]
+	return (a << 8) | uint32(m)
 }
 
-// Decimal to integer starting at &s[i0].
-// Returns number, new offset, success.
-func dtoi(s string, i0 int) (n int, i int, ok bool) {
-	n = 0
-	neg := false
-	if len(s) > 0 && s[0] == '-' {
-		neg = true
-		s = s[1:]
-	}
-	for i = i0; i < len(s) && '0' <= s[i] && s[i] <= '9'; i++ {
-		n = n*10 + int(s[i]-'0')
-		if n >= big {
-			if neg {
-				return -big, i + 1, false
-			}
-			return big, i, false
-		}
-	}
-	if i == i0 {
-		return 0, i, false
-	}
-	if neg {
-		n = -n
-		i++
-	}
-	return n, i, true
+type prefilter_descr struct {
+	Disabled []string
 }
 
 type filter_descr struct {
@@ -123,9 +83,10 @@ type domain_descr struct {
 }
 
 type config_descr struct {
-	Backends map[string][]string
-	Filters  map[string]*filter_descr
-	Domains  map[string]*domain_descr
+	Prefilters *prefilter_descr
+	Backends   map[string][]string
+	Filters    map[string]*filter_descr
+	Domains    map[string]*domain_descr
 }
 
 func parseBackend(s string) *backend {
@@ -152,13 +113,19 @@ func parseBackend(s string) *backend {
 func parseDenyFilters(arr []string) filter {
 	var f droppingV4Filter
 	f.rules = make(map[uint32]bool)
-	for _, a := range arr {
-		ip_b := parseIPv4(a)
-		if ip_b == nil {
-			panic("bad filter " + a)
+	var callback = func(item string) {
+		ip_num := parseIPv4(item)
+		if ip_num == 0 {
+			panic("bad filter " + item)
 		}
-		ip_n := binary.BigEndian.Uint32(ip_b)
-		f.rules[ip_n] = true
+		f.rules[ip_num] = true
+	}
+	for _, a := range arr {
+		if strings.HasPrefix(a, "@") {
+			addItemsFromFile(a[1:], callback)
+		} else {
+			callback(a)
+		}
 	}
 	return &f
 }
@@ -173,12 +140,10 @@ func parseReplaceFilter(arr []string) filter {
 		}
 		ip_a := parseIPv4(parr[0])
 		ip_b := parseIPv4(parr[1])
-		if ip_a == nil || ip_b == nil {
+		if ip_a*ip_b == 0 {
 			panic("bad filter " + a)
 		}
-		ip_an := binary.BigEndian.Uint32(ip_a)
-		ip_bn := binary.BigEndian.Uint32(ip_b)
-		f.rules[ip_an] = ip_bn
+		f.rules[ip_a] = ip_b
 	}
 	return &f
 }
@@ -213,12 +178,55 @@ func (c *config) parseDomain(d *domain_descr) *entry {
 	return entry
 }
 
-func initialConfig(file string, conf *config) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = fmt.Errorf("%T:%v", e, e)
+func isAlphabetOrNumber(b byte) bool {
+	return (b >= '0' && b <= '9') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= 'a' && b <= 'z')
+}
+
+func addItemsFromFile(name string, callback func(string)) {
+	fr, err := os.Open(name)
+	if err != nil {
+		panic(err)
+	}
+	defer fr.Close()
+	rd := bufio.NewReader(fr)
+	for {
+		line_b, _, err := rd.ReadLine()
+		if len(line_b) > 0 {
+			line := strings.TrimSpace(string(line_b))
+			if isAlphabetOrNumber(line[0]) {
+				callback(line)
+			}
 		}
-	}()
+		if err != nil {
+			break
+		}
+	}
+}
+
+func parsePrefilters(f *prefilter_descr, tree *radix.Tree, e *entry) {
+	var callback = func(item string) {
+		tree.Insert(reverseCharacters(item), e)
+	}
+	for _, name := range f.Disabled {
+		if len(name) > 1 {
+			// include file
+			if name[0] == '@' {
+				addItemsFromFile(name[1:], callback)
+			} else { // normal entry
+				tree.Insert(reverseCharacters(name), e)
+			}
+		}
+	}
+}
+
+func initialConfig(file string, conf *config) (err error) {
+	//	defer func() {
+	//		if e := recover(); e != nil {
+	//			err = fmt.Errorf("%T:%v", e, e)
+	//		}
+	//	}()
 
 	content, err := ioutil.ReadFile(file)
 	if err != nil {
@@ -231,6 +239,7 @@ func initialConfig(file string, conf *config) (err error) {
 		return
 	}
 
+	// parse backends
 	var allBackends = make(backendSet)
 	for k, v := range des.Backends {
 		var bs []*backend
@@ -240,12 +249,13 @@ func initialConfig(file string, conf *config) (err error) {
 		allBackends[k] = bs
 	}
 
+	// parse filters
 	var allFilters = make(filterSet)
 	for k, v := range des.Filters {
 		parseFilter(allFilters, k, v)
 	}
 
-	// set config fields
+	// set fields of config instance
 	conf.allFilters = allFilters
 	conf.allBackends = allBackends
 	conf.global = &entry{
@@ -253,6 +263,7 @@ func initialConfig(file string, conf *config) (err error) {
 		filters:  allFilters[defaultLabel],
 	}
 
+	// parse domains
 	var entries = radix.New()
 	for k, v := range des.Domains {
 		entry := conf.parseDomain(v)
@@ -274,6 +285,10 @@ func initialConfig(file string, conf *config) (err error) {
 			entry.filters = conf.global.filters
 		}
 	}
+	// parse prefilter
+	disabled := &entry{}
+	conf.disabled = disabled
+	parsePrefilters(des.Prefilters, entries, disabled)
 
 	conf.entries = entries
 	return
