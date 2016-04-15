@@ -33,7 +33,7 @@ func (c *rrcache) get(req *dns.Msg) *dns.Msg {
 }
 
 func (c *rrcache) set(resp *dns.Msg, lshift uint) {
-	var expiry uint32 = 0xffFFffFF
+	var expiry uint32 = 3600
 	for _, rr := range resp.Answer {
 		ttl := rr.Header().Ttl
 		if ttl > 0 && ttl < expiry {
@@ -42,8 +42,6 @@ func (c *rrcache) set(resp *dns.Msg, lshift uint) {
 	}
 	if expiry <= 2 { // special case for dubious item
 		expiry = 300
-	} else if expiry > 3600 {
-		expiry = 3600
 	} else {
 		expiry <<= lshift
 	}

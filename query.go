@@ -60,7 +60,6 @@ func (t *transaction) reply(msg *dns.Msg, rtt int, err error, be *backend) {
 		} else {
 			log.Printf("Query [%s %s] @%s rtt=%d err=%v", q.Name, dns.TypeToString[q.Qtype], be.url, rtt, err)
 		}
-
 		if msg != nil && len(msg.Answer) > 0 {
 			msg = applyFilters(msg, t.filters)
 		}
@@ -107,6 +106,7 @@ var opt_hdr = []dns.RR{
 		Hdr: dns.RR_Header{
 			Name:   ".",
 			Rrtype: dns.TypeOPT,
+			Class:  dns.DefaultMsgSize,
 		},
 	},
 }
@@ -143,6 +143,11 @@ func (q *qClient) getConnection(be *backend) (*dns.Conn, error) {
 		return conn, nil
 	}
 	q.cmu.RUnlock()
+	return q.createConnection(be, false)
+}
+
+// udp connection
+func (q *qClient) createConnection(be *backend, force bool) (*dns.Conn, error) {
 	lAddr, err := net.ResolveUDPAddr(be.net, ":0")
 	if err != nil {
 		return nil, err
@@ -155,27 +160,58 @@ func (q *qClient) getConnection(be *backend) (*dns.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn := &dns.Conn{Conn: udpConn}
+
+	var conn = &dns.Conn{Conn: udpConn}
+	var existed bool
 	q.cmu.Lock()
-	q.conns[be.url] = conn
+	// recheck map whether the connection has been created.
+	if old, y := q.conns[be.url]; y {
+		if force {
+			// close old then put new
+			old.Close()
+		} else {
+			// reuse old
+			existed = true
+			udpConn.Close()
+			conn = old
+		}
+	}
+	if !existed {
+		q.conns[be.url] = conn
+		go q.listen(conn, be)
+	}
 	q.cmu.Unlock()
-	go q.listen(conn, be)
 	return conn, nil
 }
 
 func (q *qClient) listen(conn *dns.Conn, be *backend) {
+	var msg *dns.Msg
+	var err error
+
 	for {
-		m, err := conn.ReadMsg()
-		if m != nil {
-			txKey := fmt.Sprint(be.url, m.Id)
+		msg, err = conn.ReadMsg()
+		if msg != nil {
+			txKey := fmt.Sprint(be.url, msg.Id)
 			q.tmu.RLock()
 			tx := q.txMap[txKey]
 			q.tmu.RUnlock()
 			if tx != nil {
-				tx.reply(m, getRtt(conn), err, be)
+				tx.reply(msg, getRtt(conn), err, be)
 			}
 		} else if _, y := err.(*net.OpError); y {
-			return
+			conn.Close()
+			log.Printf("listen remote=%s error=%s", be.addr, err)
+			break
+		}
+	}
+	// recreate connection and start listening
+	for {
+		conn, err = q.createConnection(be, true)
+		if conn != nil {
+			break
+		} else {
+			log.Println("create connection remote=%s error=%s", be.addr, err)
+			time.Sleep(time.Second * 2)
 		}
 	}
 }

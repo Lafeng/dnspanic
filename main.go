@@ -18,6 +18,10 @@ var (
 	qclt *qClient
 )
 
+func init() {
+	log.SetFlags(log.Flags() | log.Lmicroseconds)
+}
+
 func main() {
 	var (
 		localAddr string
@@ -132,7 +136,9 @@ nextQuery:
 	}
 
 	if resultMsg != nil {
-		rrc.set(resultMsg, 0)
+		if len(resultMsg.Question) > 0 {
+			rrc.set(resultMsg, 0)
+		}
 		resultMsg.Id = req.Id
 		w.WriteMsg(resultMsg)
 	} else {
