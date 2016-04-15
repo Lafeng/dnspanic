@@ -37,13 +37,18 @@ type transaction struct {
 	txKey   string // proto+addr+id
 }
 
-func newTransaction(req *dns.Msg, filters []filter) *transaction {
-	return &transaction{
-		result:  make(chan *dns.Msg, 1),
+func (tx *transaction) newTransaction(req *dns.Msg, filters []filter) *transaction {
+	_tx := &transaction{
 		req:     req,
 		created: time.Now().Unix(),
 		filters: filters,
 	}
+	if tx == nil {
+		_tx.result = make(chan *dns.Msg, 1)
+	} else {
+		_tx.result = tx.result
+	}
+	return _tx
 }
 
 func (t *transaction) reply(msg *dns.Msg, rtt int, err error, be *backend) {
@@ -200,6 +205,7 @@ func (q *qClient) listen(conn *dns.Conn, be *backend) {
 			}
 		} else if _, y := err.(*net.OpError); y {
 			conn.Close()
+			time.Sleep(time.Second)
 			log.Printf("listen remote=%s error=%s", be.addr, err)
 			break
 		}

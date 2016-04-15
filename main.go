@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	conf *config
-	rrc  *rrcache
-	qclt *qClient
+	conf   *config
+	rrc    *rrcache
+	qclt   *qClient
+	swcall *singleWayCalling
 )
 
 func init() {
@@ -35,6 +36,7 @@ func main() {
 	qclt = newQClient()
 	rrc = newRRCache()
 	conf = new(config)
+	swcall = newSingleWayCalling()
 	if err := initialConfig(cfgPath, conf); err != nil {
 		log.Fatalln(err)
 	}
@@ -113,30 +115,20 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	var resultMsg *dns.Msg
-	var nextReq dns.Msg
-	nextReq.Id = dns.Id()
-	nextReq.RecursionDesired = true
-	nextReq.AuthenticatedData = true
-	nextReq.Question = req.Question
-	nextReq.Extra = opt_hdr
+	result, original := swcall.call(msgKey(req), func() interface{} {
+		var nextReq dns.Msg
+		nextReq.Id = dns.Id()
+		nextReq.RecursionDesired = true
+		nextReq.AuthenticatedData = true
+		nextReq.Question = req.Question
+		nextReq.Extra = opt_hdr
+		return queryBackends(entry, &nextReq)
+	})
 
-nextQuery:
-	for _, be := range entry.backends {
-		tx := newTransaction(&nextReq, entry.filters)
-		qclt.query(be, tx)
-		select {
-		case resultMsg = <-tx.result:
-			if resultMsg != nil {
-				break nextQuery
-			}
-		case <-time.After(_TIMEOUT_S):
-			continue
-		}
-	}
-
+	var resultMsg = result.(*dns.Msg)
 	if resultMsg != nil {
-		if len(resultMsg.Question) > 0 {
+		// cacheable condition
+		if original && len(resultMsg.Question) > 0 {
 			rrc.set(resultMsg, 0)
 		}
 		resultMsg.Id = req.Id
@@ -144,6 +136,23 @@ nextQuery:
 	} else {
 		log.Println("no response for", req.Question[0].Name)
 	}
+}
+
+func queryBackends(entry *entry, nextReq *dns.Msg) *dns.Msg {
+	var tx *transaction
+	for _, be := range entry.backends {
+		tx = tx.newTransaction(nextReq, entry.filters)
+		qclt.query(be, tx)
+		select {
+		case resultMsg := <-tx.result:
+			if resultMsg != nil {
+				return resultMsg
+			}
+		case <-time.After(_TIMEOUT_S):
+			continue
+		}
+	}
+	return nil
 }
 
 func waitSignal(end chan error) {
