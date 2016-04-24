@@ -140,19 +140,24 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 func queryBackends(entry *entry, nextReq *dns.Msg) *dns.Msg {
 	var tx *transaction
-	for _, be := range entry.backends {
+	var lastMsg *dns.Msg
+	for i, be := range entry.backends {
 		tx = tx.newTransaction(nextReq, entry.filters)
 		qclt.query(be, tx)
 		select {
 		case resultMsg := <-tx.result:
 			if resultMsg != nil {
-				return resultMsg
+				if i == 0 && resultMsg.Rcode != dns.RcodeSuccess {
+					lastMsg = resultMsg
+				} else {
+					return resultMsg
+				}
 			}
-		case <-time.After(_TIMEOUT_S):
+		case <-time.After(_TIMEOUT_2):
 			continue
 		}
 	}
-	return nil
+	return lastMsg
 }
 
 func waitSignal(end chan error) {

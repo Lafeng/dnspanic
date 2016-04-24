@@ -16,7 +16,8 @@ import (
 
 const (
 	_TIMEOUT   = time.Second
-	_TIMEOUT_S = _TIMEOUT >> 1
+	_TIMEOUT_1 = time.Millisecond * 500
+	_TIMEOUT_2 = time.Millisecond * 300
 )
 
 type backendSet map[string][]*backend
@@ -258,7 +259,7 @@ func (q *qClient) query(be *backend, tx *transaction) {
 	if strings.HasPrefix(be.net, "udp") {
 		conn, err = q.getConnection(be)
 	} else {
-		conn, err = dns.DialTimeout(be.net, be.addr, _TIMEOUT_S)
+		conn, err = dns.DialTimeout(be.net, be.addr, _TIMEOUT_1)
 		isTcpConn = true
 	}
 
@@ -278,7 +279,7 @@ func (q *qClient) query(be *backend, tx *transaction) {
 	if isTcpConn {
 		go q.requestOverTcp(conn, be)
 	}
-	conn.SetWriteDeadline(time.Now().Add(_TIMEOUT_S))
+	conn.SetWriteDeadline(time.Now().Add(_TIMEOUT_1))
 	conn.WriteMsg(req)
 	return
 }
