@@ -12,6 +12,7 @@ import (
 	"github.com/armon/go-radix"
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/printer"
+	"github.com/miekg/dns"
 )
 
 type config struct {
@@ -25,6 +26,22 @@ type config struct {
 type entry struct {
 	backends []*backend
 	filters  []filter
+	records  map[uint32][]dns.RR
+}
+
+func (e *entry) resovleReq(req *dns.Msg) *dns.Msg {
+	q := req.Question[0]
+	key := uint32(q.Qclass)<<16 | uint32(q.Qtype)
+	if rr := e.records[key]; rr != nil {
+		var resp = new(dns.Msg)
+		resp.Question = req.Question
+		resp.Answer = rr
+		resp.Id = req.Id
+		resp.Response = true
+		return resp
+	} else {
+		return nil
+	}
 }
 
 func reverseCharacters(src string) string {
@@ -87,6 +104,7 @@ type config_descr struct {
 	Backends   map[string][]string
 	Filters    map[string]*filter_descr
 	Domains    map[string]*domain_descr
+	Zones      []string
 }
 
 func parseBackend(s string) *backend {
@@ -176,6 +194,34 @@ func (c *config) parseDomain(d *domain_descr) *entry {
 		entry.filters = append(entry.filters, f...)
 	}
 	return entry
+}
+
+func (c *config) parseZones(t *radix.Tree, zones []string) {
+	for _, str := range zones {
+		str = strings.TrimSpace(str)
+		rr, err := dns.NewRR(str)
+		if err != nil {
+			panic(err)
+		}
+		rrname := rr.Header().Name
+		rrname = reverseCharacters(rrname)[1:]
+		nkey, en, y := t.LongestPrefix(rrname)
+		var de *entry
+		if !y || nkey != rrname {
+			de = new(entry)
+			t.Insert(rrname, de)
+		} else {
+			de = en.(*entry)
+		}
+		rrMap := de.records
+		if rrMap == nil {
+			rrMap = make(map[uint32][]dns.RR)
+			de.records = rrMap
+		}
+		h := rr.Header()
+		key := uint32(h.Class)<<16 | uint32(h.Rrtype)
+		rrMap[key] = append(rrMap[key], rr)
+	}
 }
 
 func isAlphabetOrNumber(b byte) bool {
@@ -289,6 +335,8 @@ func initialConfig(file string, conf *config) (err error) {
 	disabled := &entry{}
 	conf.disabled = disabled
 	parsePrefilters(des.Prefilters, entries, disabled)
+	// parse zones
+	conf.parseZones(entries, des.Zones)
 
 	conf.entries = entries
 	return

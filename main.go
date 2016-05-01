@@ -114,6 +114,13 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		dns.HandleFailed(w, req)
 		return
 	}
+	if entry.records != nil {
+		resp := entry.resovleReq(req)
+		if resp != nil {
+			w.WriteMsg(resp)
+			return
+		}
+	}
 
 	result, original := swcall.call(msgKey(req), func() interface{} {
 		var nextReq dns.Msg
