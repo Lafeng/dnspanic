@@ -135,7 +135,7 @@ func (h proxyHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	var resultMsg = result.(*dns.Msg)
 	if resultMsg != nil {
 		// cacheable condition
-		if original && len(resultMsg.Question) > 0 {
+		if original && len(resultMsg.Answer) > 0 {
 			rrc.set(resultMsg, 0)
 		}
 		resultMsg.Id = req.Id
