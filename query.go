@@ -56,6 +56,10 @@ func (t *transaction) reply(msg *dns.Msg, rtt int, err error, be *backend) {
 	var cnt int32
 	if msg != nil && msg.Response {
 		cnt = atomic.AddInt32(&t.replCnt, 1)
+		if msg.Len() > 512 {
+			// Simply use dns compress to prevent the message larger than 512-bytes
+			msg.Compress = true
+		}
 	}
 
 	if cnt == 1 {
